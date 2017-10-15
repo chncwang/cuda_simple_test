@@ -2,6 +2,6 @@
 
 int main() {
     InitGpu();
-    TestMemcpy();
+    TestGetMax();
     return 0;
 }

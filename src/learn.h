@@ -3,5 +3,7 @@
 
 void InitGpu();
 void TestMemcpy();
+void TestGetMax();
+void TestMemCpy();
 
 #endif

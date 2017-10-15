@@ -34,6 +34,63 @@ void TestMemcpy() {
     assert(status == CNMEM_STATUS_SUCCESS);
     int *gpu_arr = static_cast<int *>(gpu_mem);
     checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, memsize, cudaMemcpyHostToDevice));
-
     free(cpu_mem);
+}
+
+
+__global__ void max(float **arr) {
+    int idx = threadIdx.x;
+    float max = -1;
+    for (int i = 0; i < 100; ++i) {
+        printf("i:%d\n", i);
+        if (arr[idx][i] > max) {
+            max = arr[idx][i];
+        }
+    }
+    printf("max:%f\n", max);
+}
+
+__global__ void print_arr(float *arr) {
+    printf("idx:%d\n", threadIdx.x);
+    printf("%f\n", arr[threadIdx.x]);
+}
+
+void TestMemCpy() {
+    void *gpu_mem;
+    cnmemStatus_t status = cnmemMalloc(&gpu_mem, 100 * sizeof(float), NULL);
+    assert(status == CNMEM_STATUS_SUCCESS);
+    float *gpu_arr = static_cast<float *>(gpu_mem);
+    float *cpu_mem = (float *)malloc(100 * sizeof(float));
+    for (int i = 0; i < 100; ++i) {
+        cpu_mem[i] = i;
+    }
+    checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, 100 * sizeof(float), cudaMemcpyHostToDevice));
+    print_arr<<<1, 100>>>(gpu_arr);
+    cudaDeviceSynchronize();
+}
+
+void TestGetMax() {
+    void *gpu_mem;
+    cnmemStatus_t status = cnmemMalloc(&gpu_mem, 100 * sizeof(float*), NULL);
+    assert(status == CNMEM_STATUS_SUCCESS);
+    float **gpu_arr = static_cast<float **>(gpu_mem);
+    float **cpu_mem = (float **)malloc(100 * sizeof(float*));
+    for (int i = 0; i< 100; ++i) {
+        void *gpu_mem2;
+        cnmemStatus_t status = cnmemMalloc(&gpu_mem2, 100 * sizeof(float), NULL);
+        assert(status == CNMEM_STATUS_SUCCESS);
+        float *gpu_arr2 = static_cast<float *>(gpu_mem2);
+        float *cpu_mem2 = (float*)malloc(100 * sizeof(float));
+        for (int j = 0; j < 100; ++j) {
+            cpu_mem2[j] = i * j;
+        }
+        checkCudaErrors(cudaMemcpy(gpu_arr2, cpu_mem2, 100 * sizeof(float), cudaMemcpyHostToDevice));
+        free(cpu_mem2);
+        cpu_mem[i] = gpu_arr2;
+    }
+    checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, 100 * sizeof(float*), cudaMemcpyHostToDevice));
+    std::cout << "begin max" << std::endl;
+    max<<<1, 100>>>(gpu_arr);
+    cudaDeviceSynchronize();
+    std::cout << "end max" << std::endl;
 }
