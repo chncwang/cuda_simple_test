@@ -1,10 +1,3 @@
-#include <iostream>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cublas_v2.h>
-#include <helper_cuda.h>
-#include "cnmem.h"
-#include <cassert>
 #include "learn.h"
 #include <cstdlib>
 
@@ -90,17 +83,17 @@ __global__ void set_zero(float *mem) {
     mem[v] = v;
 }
 
-void TestFastCpy() {
+void TestFastCpy(cudaStream_t stream) {
     void *src_mem;
     void *dest_mem;
-    cnmemStatus_t status = cnmemMalloc(&src_mem, 100 * sizeof(float), NULL);
-    assert(status == CNMEM_STATUS_SUCCESS);
-    set_zero<<<1, 100>>>((float*)src_mem);
-    status = cnmemMalloc(&dest_mem, 100 * sizeof(float), NULL);
-    assert(status == CNMEM_STATUS_SUCCESS);
-    cudaMemcpyAsync((float*)dest_mem, (float*)src_mem, 100 * sizeof(float), cudaMemcpyDeviceToDevice, 0);
-    status = cnmemFree(src_mem, 0);
-    assert(status == CNMEM_STATUS_SUCCESS);
-    status = cnmemFree(dest_mem, 0);
-    assert(status == CNMEM_STATUS_SUCCESS);
+    static bool called;
+    if (!called) {
+        called = true;
+        cnmemStatus_t status = cnmemMalloc(&src_mem, 100 * sizeof(float), NULL);
+        assert(status == CNMEM_STATUS_SUCCESS);
+        set_zero<<<1, 100>>>((float*)src_mem);
+        status = cnmemMalloc(&dest_mem, 100 * sizeof(float), NULL);
+        assert(status == CNMEM_STATUS_SUCCESS);
+    }
+    cudaMemcpyAsync((float*)dest_mem, (float*)src_mem, 100 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
 }
