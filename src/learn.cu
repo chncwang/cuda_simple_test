@@ -22,32 +22,15 @@ void InitGpu() {
     assert(status == CNMEM_STATUS_SUCCESS);
 }
 
-void TestMemcpy() {
-    int size = 10;
-    int memsize = size * sizeof(int);
-    int *cpu_mem = (int *)malloc(memsize);
-    assert(cpu_mem != NULL);
-    void *gpu_mem;
-    cnmemStatus_t status = cnmemMalloc(&gpu_mem, memsize, NULL);
-    std::cerr << "status:" << cnmemGetErrorString(status) << std::endl;
-
-    assert(status == CNMEM_STATUS_SUCCESS);
-    int *gpu_arr = static_cast<int *>(gpu_mem);
-    checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, memsize, cudaMemcpyHostToDevice));
-    free(cpu_mem);
-}
-
 
 __global__ void max(float **arr) {
     int idx = threadIdx.x;
     float max = -1;
     for (int i = 0; i < 100; ++i) {
-        printf("i:%d\n", i);
         if (arr[idx][i] > max) {
             max = arr[idx][i];
         }
     }
-    printf("max:%f\n", max);
 }
 
 __global__ void print_arr(float *arr) {
@@ -70,6 +53,9 @@ void TestMemCpy() {
 }
 
 void TestGetMax() {
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
     void *gpu_mem;
     cnmemStatus_t status = cnmemMalloc(&gpu_mem, 100 * sizeof(float*), NULL);
     assert(status == CNMEM_STATUS_SUCCESS);
@@ -84,7 +70,11 @@ void TestGetMax() {
         for (int j = 0; j < 100; ++j) {
             cpu_mem2[j] = i * j;
         }
-        checkCudaErrors(cudaMemcpy(gpu_arr2, cpu_mem2, 100 * sizeof(float), cudaMemcpyHostToDevice));
+        cudaEventRecord(start);
+        cudaStream_t stream;
+        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+        checkCudaErrors(cudaMemcpyAsync(gpu_arr2, cpu_mem2, 100 * sizeof(float), cudaMemcpyHostToDevice, stream));
+        cudaEventRecord(stop);
         free(cpu_mem2);
         cpu_mem[i] = gpu_arr2;
     }
@@ -93,4 +83,24 @@ void TestGetMax() {
     max<<<1, 100>>>(gpu_arr);
     cudaDeviceSynchronize();
     std::cout << "end max" << std::endl;
+}
+
+__global__ void set_zero(float *mem) {
+    int v = threadIdx.x;
+    mem[v] = v;
+}
+
+void TestFastCpy() {
+    void *src_mem;
+    void *dest_mem;
+    cnmemStatus_t status = cnmemMalloc(&src_mem, 100 * sizeof(float), NULL);
+    assert(status == CNMEM_STATUS_SUCCESS);
+    set_zero<<<1, 100>>>((float*)src_mem);
+    status = cnmemMalloc(&dest_mem, 100 * sizeof(float), NULL);
+    assert(status == CNMEM_STATUS_SUCCESS);
+    cudaMemcpyAsync((float*)dest_mem, (float*)src_mem, 100 * sizeof(float), cudaMemcpyDeviceToDevice, 0);
+    status = cnmemFree(src_mem, 0);
+    assert(status == CNMEM_STATUS_SUCCESS);
+    status = cnmemFree(dest_mem, 0);
+    assert(status == CNMEM_STATUS_SUCCESS);
 }
