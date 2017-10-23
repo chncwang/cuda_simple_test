@@ -83,6 +83,11 @@ __global__ void set_zero(float *mem) {
     mem[v] = v;
 }
 
+__global__ void copy(float *dest, float*src) {
+    int index = threadIdx.x;
+    dest[index] = src[index];
+}
+
 void TestFastCpy(cudaStream_t stream) {
     void *src_mem;
     void *dest_mem;
@@ -95,5 +100,5 @@ void TestFastCpy(cudaStream_t stream) {
         status = cnmemMalloc(&dest_mem, 100 * sizeof(float), NULL);
         assert(status == CNMEM_STATUS_SUCCESS);
     }
-    cudaMemcpyAsync((float*)dest_mem, (float*)src_mem, 100 * sizeof(float), cudaMemcpyDeviceToDevice, stream);
+    copy<<<1, 100>>>((float*)dest_mem, (float*)src_mem);
 }
