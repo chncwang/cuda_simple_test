@@ -1,106 +1,161 @@
 #include "learn.h"
 #include <cstdlib>
+#include <random>
+#include <cublas_v2.h>
 
 using namespace std;
 
-void InitGpu() {
-    int deviceid = 0;
-    cnmemDevice_t device;
-    memset(&device, 0, sizeof(device));
-    device.device = deviceid;
-    device.size = 1000000000;
-    cudaSetDevice(deviceid);
-    cnmemStatus_t status = cnmemInit(1, &device, CNMEM_FLAGS_CANNOT_GROW);
-    std::cerr << "status:" << cnmemGetErrorString(status) << std::endl;
-    assert(status == CNMEM_STATUS_SUCCESS);
-}
-
-
-__global__ void max(float **arr) {
-    int idx = threadIdx.x;
-    float max = -1;
-    for (int i = 0; i < 100; ++i) {
-        if (arr[idx][i] > max) {
-            max = arr[idx][i];
-        }
-    }
-}
-
-__global__ void print_arr(float *arr) {
-    printf("idx:%d\n", threadIdx.x);
-    printf("%f\n", arr[threadIdx.x]);
-}
-
-void TestMemCpy() {
-    void *gpu_mem;
-    cnmemStatus_t status = cnmemMalloc(&gpu_mem, 100 * sizeof(float), NULL);
-    assert(status == CNMEM_STATUS_SUCCESS);
-    float *gpu_arr = static_cast<float *>(gpu_mem);
-    float *cpu_mem = (float *)malloc(100 * sizeof(float));
-    for (int i = 0; i < 100; ++i) {
-        cpu_mem[i] = i;
-    }
-    checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, 100 * sizeof(float), cudaMemcpyHostToDevice));
-    print_arr<<<1, 100>>>(gpu_arr);
-    cudaDeviceSynchronize();
-}
-
-void TestGetMax() {
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
-    void *gpu_mem;
-    cnmemStatus_t status = cnmemMalloc(&gpu_mem, 100 * sizeof(float*), NULL);
-    assert(status == CNMEM_STATUS_SUCCESS);
-    float **gpu_arr = static_cast<float **>(gpu_mem);
-    float **cpu_mem = (float **)malloc(100 * sizeof(float*));
-    for (int i = 0; i< 100; ++i) {
-        void *gpu_mem2;
-        cnmemStatus_t status = cnmemMalloc(&gpu_mem2, 100 * sizeof(float), NULL);
-        assert(status == CNMEM_STATUS_SUCCESS);
-        float *gpu_arr2 = static_cast<float *>(gpu_mem2);
-        float *cpu_mem2 = (float*)malloc(100 * sizeof(float));
-        for (int j = 0; j < 100; ++j) {
-            cpu_mem2[j] = i * j;
-        }
-        cudaEventRecord(start);
-        cudaStream_t stream;
-        cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
-        checkCudaErrors(cudaMemcpyAsync(gpu_arr2, cpu_mem2, 100 * sizeof(float), cudaMemcpyHostToDevice, stream));
-        cudaEventRecord(stop);
-        free(cpu_mem2);
-        cpu_mem[i] = gpu_arr2;
-    }
-    checkCudaErrors(cudaMemcpy(gpu_arr, cpu_mem, 100 * sizeof(float*), cudaMemcpyHostToDevice));
-    std::cout << "begin max" << std::endl;
-    max<<<1, 100>>>(gpu_arr);
-    cudaDeviceSynchronize();
-    std::cout << "end max" << std::endl;
-}
-
-__global__ void set_zero(float *mem) {
-    int v = threadIdx.x;
-    mem[v] = v;
-}
-
-__global__ void copy(float *dest, float*src) {
-    int x = blockIdx.x;
-    int index = x << 1;
+__global__ void CopyElement(char *dest, char *src) {
+    int index = threadIdx.x;
     dest[index] = src[index];
-    dest[index+1] = src[index];
 }
 
-void TestFastCpy(cudaStream_t stream) {
-    void *src_mem;
-    void *dest_mem;
-    static bool called;
-    if (!called) {
-        called = true;
-        cnmemStatus_t status = cnmemMalloc(&src_mem, 100 * sizeof(float), NULL);
-        assert(status == CNMEM_STATUS_SUCCESS);
-        set_zero<<<1, 50>>>((float*)src_mem);
-        status = cnmemMalloc(&dest_mem, 100 * sizeof(float), NULL);
-        assert(status == CNMEM_STATUS_SUCCESS);
+template<typename T>
+void CopyGlobalArray(T *dest, T *src, int length) {
+    char *dest_int = (char*)(dest);
+    char *src_int = (char*)(src);
+    CopyElement<<<1, length * sizeof(T)>>>(dest_int, src_int);
+}
+
+__global__ void GlobalAssignVector(float *vec, int index, float v) {
+    vec[index] = v;
+}
+
+__global__ void GlobalPrintVector(float *vec, int dim) {
+    printf("GlobalPrintVector:");
+    for (int i = 0; i < dim; ++i) {
+        printf("%f, ", vec[i]);
     }
-    copy<<<1, 10>>>((float*)dest_mem, (float*)src_mem);
+    printf("\n");
+}
+
+void PrintGPUVector(float *vec, int dim) {
+    GlobalPrintVector<<<1, 1>>>(vec, dim);
+    cudaDeviceSynchronize();
+}
+
+__global__ void N3LDGKernelPrintVector(void **vec, int dim) {
+    printf("N3LDGKernelPrintVector: dim %d, vec %p\n", dim, vec);
+    for (int i = 0; i < dim; ++i) {
+        printf("%p, ", vec[i]);
+    }
+    printf("\n");
+}
+
+void PrintGPUVector(void **vec, int dim) {
+    N3LDGKernelPrintVector<<<1, 1>>>(vec, dim);
+    cudaDeviceSynchronize();
+}
+
+void PrintCPUVector(float *vec, int dim) {
+    for (int i = 0; i < dim; ++i ) {
+        cout << vec[dim] << ", ";
+    }
+    cout << endl;
+}
+
+void InitGPUVector(float *vec, int dim) {
+    static std::random_device rd;
+    static std::mt19937 mt(rd());
+    static std::uniform_real_distribution<> dist(-10, 10);
+    for (int i = 0; i < dim; ++i) {
+        GlobalAssignVector<<<1, 1>>>(vec, i, dist(mt));
+    }
+}
+
+void InitCPUVector(float *vec, int dim) {
+    static std::random_device rd;
+    static std::mt19937 mt(rd());
+    static std::uniform_real_distribution<> dist(-10, 10);
+    for (int i = 0; i < dim; ++i) {
+        vec[i] = dist(mt);
+    }
+}
+
+float *NewGPUVector(int dim) {
+    float *v;
+    assert(cudaMalloc((void**)&v, sizeof(float) * dim) == cudaSuccess);
+    InitGPUVector(v, dim);
+    GlobalPrintVector<<<1, 1>>>(v, dim);
+    cudaDeviceSynchronize();
+    return v;
+}
+
+float *NewCPUVector(int dim) {
+    float *v = (float*)malloc(sizeof(float) * dim);
+    InitCPUVector(v, dim);
+    return v;
+}
+
+constexpr int THREAD_COUNT_PER_BLOCK = 1024;
+constexpr int THREAD_COUNT_PER_WRAP = 32;
+constexpr int MAX_BLOCK_COUNT = 56;
+
+int BlockCount(int size) {
+    int n = (size + THREAD_COUNT_PER_BLOCK - 1) / THREAD_COUNT_PER_BLOCK;
+    return n > MAX_BLOCK_COUNT ? MAX_BLOCK_COUNT : n;
+}
+
+__global__ void Copy(float *src, float *dest, int len) {
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    int step = blockDim.x * gridDim.x;
+    for (int i = index; i < len; i += step) {
+        dest[index] = src[index];
+    }
+}
+
+void N3LDGCopyArray(float *src, float *dest, int len) {
+    Copy<<<BlockCount(len) ,THREAD_COUNT_PER_BLOCK>>>(src, dest, len);
+}
+
+__global__ void N3LDGKernelTanh(float *src, float *dest, int len) {
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    int step = blockDim.x * gridDim.x;
+    for (int i = index; i < len; i += step) {
+        dest[index] = tanh(src[index]);
+    }
+}
+
+void N3LDGTanh(float *src, float *dest, int len) {
+    N3LDGKernelTanh<<<BlockCount(len) ,THREAD_COUNT_PER_BLOCK>>>(src, dest, len);
+}
+
+__global__ void N3LDGKernelTanh(float **src, float **dest, int len, int count) {
+    for (int i = 0; i < count; ++i) {
+        for (int j = 0; j < len; ++j) {
+            dest[i][j] = 12;
+        }
+    }
+//    int thread_count_per_arr = (len / THREAD_COUNT_PER_WRAP + 1) *
+//        THREAD_COUNT_PER_WRAP;
+//    int index = blockDim.x * blockIdx.x + threadIdx.x;
+//    //printf("thread count per arr:%d\n", thread_count_per_arr);
+//    //printf("index:%d\n", index);
+//    int step = blockDim.x * gridDim.x / thread_count_per_arr;
+//    //printf("step:%d\n", step);
+//    int count_index = index / thread_count_per_arr;
+//    //printf("count_index:%d\n", count_index);
+//    for (int i = count_index; i < count; i += step) {
+//        int arr_index = index % thread_count_per_arr;
+//        //printf("arr index:%d\n", arr_index);
+//        if (arr_index < len) {
+//            dest[i][arr_index] = tanh(src[i][arr_index]);
+//        }
+//    }
+}
+
+void N3LDGTanh(float **src, float **dest, int len, int count) {
+    assert(len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK);
+    int block_count = BlockCount(len / THREAD_COUNT_PER_WRAP * THREAD_COUNT_PER_WRAP * count);
+    //N3LDGKernelTanh<<<block_count, THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
+    N3LDGKernelTanh<<<1, 1>>>(src, dest, len, count);
+}
+
+float **ToGpuVectorArray(float** vec, int len) {
+    void *result;
+    int size = len * sizeof(float*);
+    assert(cudaSuccess == cudaMalloc(&result, size));
+    assert(cudaMemcpy(result, vec, size, cudaMemcpyHostToDevice) ==
+            cudaSuccess);
+    return (float**)result;
 }

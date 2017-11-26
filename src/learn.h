@@ -8,10 +8,27 @@
 #include "cnmem.h"
 #include <cassert>
 
-void InitGpu();
-void TestGetMax();
-void TestMemCpy();
+template<typename T>
+void CopyGlobalArray(T *dest, T *src, int length);
 
-void TestFastCpy(cudaStream_t stream);
+void PrintGPUVector(float *vec, int dim);
+void PrintGPUVector(void **vec, int dim);
+
+void PrintCPUVector(float *vec, int dim);
+
+void InitGPUVector(float *vec, int dim);
+
+void InitCPUVector(float *vec, int dim);
+
+float *NewGPUVector(int dim);
+
+float *NewCPUVector(int dim);
+
+void N3LDGCopyArray(float *src, float *dest, int len);
+
+void N3LDGTanh(float *src, float *dest, int len);
+
+void N3LDGTanh(float **src, float **dest, int len, int count);
+float **ToGpuVectorArray(float** vec, int len);
 
 #endif
