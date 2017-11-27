@@ -5,6 +5,8 @@
 
 using namespace std;
 
+cudaStream_t streams[1000];
+
 __global__ void CopyElement(char *dest, char *src) {
     int index = threadIdx.x;
     dest[index] = src[index];
@@ -187,6 +189,16 @@ void N3LDGTanhByBlock(float **src, float **dest, int len, int count) {
 }
 
 void N3LDGKernelTanhByCopy(float **src, float **dest, int len, int count) {
+    float *src_big, *dest_big;
+    int size = len * count * sizeof(float);
+    int per_size = len * sizeof(float);
+    assert(cudaMalloc((void**)&src_big, size) == cudaSuccess);
+    assert(cudaMalloc((void**)&dest_big, size) == cudaSuccess);
+    for (int i = 0; i<count; ++i) {
+        Copy<<<BlockCount(per_size), THREAD_COUNT_PER_BLOCK, 0, streams[i]>>>(src[i], src_big + i * per_size, per_size);
+    }
+    cudaFree(src_big);
+    cudaFree(dest_big);
 }
 
 float **ToGpuVectorArray(float** vec, int len) {
@@ -223,25 +235,27 @@ void Benchmark() {
     assert(cudaSetDevice(1) == cudaSuccess);
     std::vector<int> dims = {100, 1000};
     std::vector<int> counts = {10, 100, 1000};
-    cublasHandle_t handle;
-    cublasCreate(&handle);
+
+    for (int i = 0; i<1000; ++i) {
+        assert(cudaStreamCreate(streams + i) == cudaSuccess);
+    }
+
     float alpha = 1.0;
     for (auto dim : dims) {
         for (auto count : counts) {
             float** gpu_vec_a = NewGPUVectors(count, dim);
             float** gpu_vec_b = NewGPUVectors(count, dim);
-            float** gpu_vec_c = NewGPUVectors(count, dim);
             cout << "begin cal" << endl;
             float sum = 0;
-            int iter = 1000;
+            int iter = 1;
             for (int i = 0; i < iter; ++i) {
                 cudaEvent_t start, stop;
                 cudaEventCreate(&start);
                 cudaEventCreate(&stop);
                 cudaEventRecord(start);
-                float **a = ToGpuVectorArray(gpu_vec_a, count);
-                float **b = ToGpuVectorArray(gpu_vec_b, count);
-                N3LDGTanhByBlock(a, b, dim, count);
+                for (int j = 0; j < count; ++j) {
+                    N3LDGKernelTanhByCopy(gpu_vec_a, gpu_vec_b, dim, count);
+                }
                 cudaEventRecord(stop);
                 cudaEventSynchronize(stop);
                 float mill;
