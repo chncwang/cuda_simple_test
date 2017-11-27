@@ -144,7 +144,6 @@ __global__ void N3LDGKernelTanh(float **src, float **dest, int len, int count) {
     }
 }
 
-
 void N3LDGTanh(float **src, float **dest, int len, int count) {
     assert(len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK);
     int block_count = BlockCount(((len - 1) / THREAD_COUNT_PER_WRAP + 1) *
