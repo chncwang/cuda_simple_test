@@ -5,6 +5,13 @@
 
 using namespace std;
 
+void CallCuda(cudaError_t status) {
+    if (status != cudaSuccess) {
+        std::cout << cudaGetErrorString(status) << std::endl;
+        abort();
+    }
+}
+
 __global__ void CopyElement(char *dest, char *src) {
     int index = threadIdx.x;
     dest[index] = src[index];
@@ -74,7 +81,7 @@ void InitCPUVector(float *vec, int dim) {
 
 float *NewGPUVector(int dim) {
     float *v;
-    assert(cudaMalloc((void**)&v, sizeof(float) * dim) == cudaSuccess);
+    CallCuda(cudaMalloc((void**)&v, sizeof(float) * dim));
     InitGPUVector(v, dim);
     cudaDeviceSynchronize();
     return v;
@@ -131,21 +138,29 @@ void N3LDGSingleThreadTanh(float **src, float **dest, int len, int count) {
 }
 
 __global__ void N3LDGKernelTanh(float **src, float **dest, int len, int count) {
-    int thread_count_per_arr = (len / THREAD_COUNT_PER_WRAP + 1) *
-        THREAD_COUNT_PER_WRAP;
+    __shared__ volatile float* src_address[THREAD_COUNT_PER_BLOCK];
+    __shared__ volatile float* dest_address[THREAD_COUNT_PER_BLOCK];
+    int thread_count_per_arr = (len / THREAD_COUNT_PER_WRAP + 1) * THREAD_COUNT_PER_WRAP;
     int index = blockDim.x * blockIdx.x + threadIdx.x;
     int step = blockDim.x * gridDim.x / thread_count_per_arr;
     int count_index = index / thread_count_per_arr;
     for (int i = count_index; i < count; i += step) {
+        __syncthreads();
+        if (index % thread_count_per_arr == 0) {
+            src_address[i] = src[i];
+            dest_address[i] = dest[i];
+        }
+        __syncthreads();
         int arr_index = index % thread_count_per_arr;
         if (arr_index < len) {
-            dest[i][arr_index] = tanh(src[i][arr_index]);
+            dest_address[i][arr_index] = tanh(src_address[i][arr_index]);
         }
     }
 }
 
 void N3LDGTanh(float **src, float **dest, int len, int count) {
     assert(len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK);
+    assert(count <= THREAD_COUNT_PER_BLOCK);
     int block_count = BlockCount(((len - 1) / THREAD_COUNT_PER_WRAP + 1) *
             THREAD_COUNT_PER_WRAP * count);
     N3LDGKernelTanh<<<block_count, THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
@@ -186,18 +201,6 @@ void N3LDGTanhByBlock(float **src, float **dest, int len, int count) {
     N3LDGKernelTanhByBlock<<<min(MAX_BLOCK_COUNT, count), THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
 }
 
-void N3LDGKernelTanhByCopy(float **src, float **dest, int len, int count) {
-}
-
-float **ToGpuVectorArray(float** vec, int len) {
-    void *result;
-    int size = len * sizeof(float*);
-    assert(cudaSuccess == cudaMalloc(&result, size));
-    assert(cudaMemcpy(result, vec, size, cudaMemcpyHostToDevice) ==
-            cudaSuccess);
-    return (float**)result;
-}
-
 float** NewGPUVectors(int count, int dim) {
     float**  result = (float**)malloc(count * sizeof(float*));
     for (int i = 0; i<count; ++i) {
@@ -220,12 +223,13 @@ __global__ void KernelAssertEqual(float **a, float **b, int len, int count) {
 }
 
 void Benchmark() {
-    assert(cudaSetDevice(1) == cudaSuccess);
+    CallCuda(cudaSetDevice(1));
     std::vector<int> dims = {100, 1000};
     std::vector<int> counts = {10, 100, 1000};
+    //std::vector<int> dims = {5};
+    //std::vector<int> counts = {2};
     cublasHandle_t handle;
     cublasCreate(&handle);
-    float alpha = 1.0;
     for (auto dim : dims) {
         for (auto count : counts) {
             float** gpu_vec_a = NewGPUVectors(count, dim);
@@ -233,15 +237,19 @@ void Benchmark() {
             float** gpu_vec_c = NewGPUVectors(count, dim);
             cout << "begin cal" << endl;
             float sum = 0;
-            int iter = 1000;
+            int iter = 10000;
+            float **a, **b;
+            int size = count * sizeof(float*);
+            CallCuda(cudaMalloc(&a, size));
+            CallCuda(cudaMalloc(&b, size));
             for (int i = 0; i < iter; ++i) {
                 cudaEvent_t start, stop;
                 cudaEventCreate(&start);
                 cudaEventCreate(&stop);
                 cudaEventRecord(start);
-                float **a = ToGpuVectorArray(gpu_vec_a, count);
-                float **b = ToGpuVectorArray(gpu_vec_b, count);
-                N3LDGTanhByBlock(a, b, dim, count);
+                cudaMemcpy(a, gpu_vec_a, size, cudaMemcpyHostToDevice);
+                cudaMemcpy(b, gpu_vec_b, size, cudaMemcpyHostToDevice);
+                N3LDGTanhByBlock(a, b,  dim, count);
                 cudaEventRecord(stop);
                 cudaEventSynchronize(stop);
                 float mill;
@@ -249,8 +257,10 @@ void Benchmark() {
                 sum += mill;
                 cudaDeviceSynchronize();
             }
-            cudaDeviceSynchronize();
+            CallCuda(cudaFree(a));
+            CallCuda(cudaFree(b));
             cout << "dim:" << dim << " count:" <<count << " time:" << sum * 1000 / iter  << endl;
         }
     }
+    CallCuda(cudaGetLastError());
 }

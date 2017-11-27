@@ -5,7 +5,6 @@
 #include "cuda_profiler_api.h"
 #include <iostream>
 #include <cuda_profiler_api.h>
-#include "cnmem.h"
 #include <cassert>
 #include <iostream>
 #include <array>

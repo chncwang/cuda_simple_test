@@ -25,8 +25,4 @@ MESSAGE("CUDA_LIBRARIES: ${CUDA_LIBRARIES}")
 set(LIBS ${LIBS} ${CUDA_LIBRARIES})
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DEIGEN_HAS_CUDA_FP16 -DEIGEN_USE_GPU")
 
-include_directories(cnmem/include)
-
-add_subdirectory(cnmem)
-set(LIBS ${LIBS} cnmem)
 add_subdirectory(src)

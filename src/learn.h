@@ -5,7 +5,6 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <helper_cuda.h>
-#include "cnmem.h"
 #include <cassert>
 
 template<typename T>
