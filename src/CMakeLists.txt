@@ -11,6 +11,12 @@ if(CMAKE_COMPILER_IS_GNUCXX)
 else()
     list(APPEND CUDA_NVCC_FLAGS "-O2")
 endif()
+
+if (CMAKE_BUILD_TYPE MATCHES Debug)
+    list(APPEND CUDA_NVCC_FLAGS "-G")
+    list(APPEND CUDA_NVCC_FLAGS "-g")
+endif()
+
 SET(CUDA_PROPAGATE_HOST_FLAGS OFF)
 
 add_executable(main main.cc)
