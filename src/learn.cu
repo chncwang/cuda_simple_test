@@ -14,6 +14,7 @@ void CallCuda(cudaError_t status) {
 
 #define  KernelPrintLine(format, ...) \
 {\
+    if (threadIdx.x == 0)\
     printf("block:%d thread:%d "#format"\n", blockIdx.x, threadIdx.x, __VA_ARGS__);\
 }
 
@@ -143,41 +144,18 @@ void N3LDGSingleThreadTanh(float **src, float **dest, int len, int count) {
 }
 
 __global__ void N3LDGKernelTanh(float **src, float **dest, int len, int count) {
-    __shared__ volatile extern float* shared_arr[];
-    int thread_count_per_arr = (len / THREAD_COUNT_PER_WRAP + 1) * THREAD_COUNT_PER_WRAP;
-    volatile float **src_address = shared_arr;
-    volatile float **dest_address = shared_arr + THREAD_COUNT_PER_BLOCK / thread_count_per_arr + 1;
-    int first_index_in_this_block = blockDim.x * blockIdx.x;
-    int index = first_index_in_this_block + threadIdx.x;
+    int thread_count_per_arr = ((len - 1) / THREAD_COUNT_PER_WRAP + 1) * THREAD_COUNT_PER_WRAP;
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
     int step = blockDim.x * gridDim.x / thread_count_per_arr;
+    assert(step > 0);
     int count_index = index / thread_count_per_arr;
-    int first_count_index_in_this_block = first_index_in_this_block / thread_count_per_arr;
 
     for (int i = count_index; i < count; i += step) {
-        int shared_memroy_index = i - first_count_index_in_this_block;
-        __syncthreads();
-        if (index % thread_count_per_arr == 0) {
-            src_address[shared_memroy_index] = src[i];
-            dest_address[shared_memroy_index] = dest[i];
-        }
-        __syncthreads();
         int arr_index = index % thread_count_per_arr;
         if (arr_index < len) {
-            dest_address[shared_memroy_index][arr_index] =
-                tanh(src_address[shared_memroy_index][arr_index]);
+            dest[i][arr_index] = tanh(src[i][arr_index]);
         }
-        first_count_index_in_this_block += step;
     }
-}
-
-void N3LDGTanh(float **src, float **dest, int len, int count) {
-    assert(len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK);
-    int block_count = BlockCount(((len - 1) / THREAD_COUNT_PER_WRAP + 1) *
-            THREAD_COUNT_PER_WRAP * count);
-    int thread_count_per_arr = (len / THREAD_COUNT_PER_WRAP + 1) * THREAD_COUNT_PER_WRAP;
-    int arr_count_per_block = THREAD_COUNT_PER_BLOCK / thread_count_per_arr + 1;
-    int dynamic_size = arr_count_per_block * 2 * sizeof(float*);
-    N3LDGKernelTanh<<<block_count, THREAD_COUNT_PER_BLOCK, dynamic_size>>>(src, dest, len, count);
 }
 
 __global__ void N3LDGKernelTanhWithoutLimit(float **src, float **dest, int len, int count) {
@@ -194,6 +172,17 @@ __global__ void N3LDGKernelTanhWithoutLimit(float **src, float **dest, int len, 
 void N3LDGTanhWithoutLimit(float **src, float **dest, int len, int count) {
     N3LDGKernelTanhWithoutLimit<<<BlockCount(len * count), THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
 }
+
+void N3LDGTanh(float **src, float **dest, int len, int count) {
+    if (len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK) {
+        int block_count = BlockCount(((len - 1) / THREAD_COUNT_PER_WRAP + 1) *
+                THREAD_COUNT_PER_WRAP * count);
+        N3LDGKernelTanh<<<block_count, THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
+    } else {
+        N3LDGTanhWithoutLimit(src, dest, len, count);
+    }
+}
+
 
 __global__ void N3LDGKernelTanhByBlock(float **src, float **dest, int len, int count) {
     __shared__ volatile float *src_arr;
@@ -236,10 +225,14 @@ __global__ void KernelAssertEqual(float **a, float **b, int len, int count) {
     }
 }
 
+void N3LDGMultiply(float *matrix, int row, int col, float vec, float *result) {
+    assert(row <= THREAD_COUNT_PER_BLOCK);
+}
+
 void Benchmark() {
     CallCuda(cudaSetDevice(1));
     std::vector<int> dims = {100, 1000};
-    std::vector<int> counts = {10, 100, 1000};
+    std::vector<int> counts = {10, 100, 1000,};
     cublasHandle_t handle;
     cublasCreate(&handle);
     for (auto dim : dims) {
@@ -262,7 +255,7 @@ void Benchmark() {
                 cudaEventRecord(start);
                 cudaMemcpy(a, gpu_vec_a, size, cudaMemcpyHostToDevice);
                 cudaMemcpy(b, gpu_vec_b, size, cudaMemcpyHostToDevice);
-                N3LDGTanh(a, b, dim, count);
+                N3LDGTanhWithoutLimit(a, b, dim, count);
                 cudaEventRecord(stop);
                 cudaEventSynchronize(stop);
                 float mill;
