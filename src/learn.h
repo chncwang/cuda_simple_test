@@ -30,5 +30,6 @@ void N3LDGTanh(float *src, float *dest, int len);
 void N3LDGTanh(float **src, float **dest, int len, int count);
 float **ToGpuVectorArray(float** vec, int len);
 void Benchmark();
+void N3LDGKernelTest();
 
 #endif

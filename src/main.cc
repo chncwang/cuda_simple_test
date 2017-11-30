@@ -12,4 +12,5 @@
 
 int main() {
     Benchmark();
+//    N3LDGKernelTest();
 }
