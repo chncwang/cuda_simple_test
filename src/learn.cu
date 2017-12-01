@@ -298,8 +298,8 @@ void N3LDGKernelTest() {
     CallCuda(cudaSetDevice(1));
     cublasHandle_t handle;
     cublasCreate(&handle);
-    for (int dima = 1; dima <= 50; dima++) {
-        for (int dimb = 1; dimb <= 10; dimb++) {
+    for (int dima = 50000; dima <= 50000; dima = dima * 4) {
+        for (int dimb = 1000; dimb <= 1000; dimb = dimb * 2) {
             pair<int, int> dim(dima, dimb);
             float *W = NewGPUVector(dim.first * dim.second);
             float *x = NewGPUVector(dim.second);
@@ -311,10 +311,10 @@ void N3LDGKernelTest() {
             cout << "first:" << dim.first << " second:" << dim.second << endl;
             N3LDGMultiply(W, dim.first, dim.second, x, y);
             cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, x, 1, W, dim.second, &beta, v, 1);
-            PrintGPUVector(W, dim.first * dim.second);
-            PrintGPUVector(x, dim.second);
-            PrintGPUVector(y, min(dim.first, 100));
-            PrintGPUVector(v, min(dim.first, 100));
+            //PrintGPUVector(W, dim.first * dim.second);
+            //PrintGPUVector(x, dim.second);
+            //PrintGPUVector(y, min(dim.first, 100));
+            //PrintGPUVector(v, min(dim.first, 100));
             N3LDGAssertEqual(y, v, dim.first);
 
             CallCuda(cudaFree(W));
