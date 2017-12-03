@@ -11,6 +11,6 @@
 #include <chrono>
 
 int main() {
-    Benchmark();
-    //N3LDGKernelTest();
+    //Benchmark();
+    N3LDGKernelTest();
 }
