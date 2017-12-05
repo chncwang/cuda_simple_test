@@ -13,4 +13,5 @@
 int main() {
     //Benchmark();
     N3LDGKernelTest();
+    //N3LDGKernelTestSingleProduct();
 }

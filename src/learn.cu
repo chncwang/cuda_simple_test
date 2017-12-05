@@ -227,6 +227,7 @@ __global__ void KernelAssertEqual(float **a, float **b, int len, int count) {
         float ratio = s / a[i][j];
         if((s < -0.001 || s > 0.001) && (ratio < -0.001 || ratio > 0.001)) {
             printf("i:%d, j:%d, a[i][j]:%f, b[i][j]:%f, s:%f\n", i, j, a[i][j], b[i][j], s);
+            printf("len:%d count:%d\n", len, count);
         }
     }
 }
@@ -308,17 +309,15 @@ __global__ void N3LDGKernelMultiplyLargeVector(float *matrix, int row, int col, 
     }
 
     int vec_index = threadIdx.x + THREAD_COUNT_PER_BLOCK * blockIdx.y;
-    if (vec_index >= col) {
-        return;
+    if (vec_index < col) {
+        shared_vec[threadIdx.x] = vec[vec_index];
     }
-    shared_vec[threadIdx.x] = vec[vec_index];
     __syncthreads();
 
-    if (matrix_index >= row * col) {
-        return;
-    }
     KernelPrintLine("matrix_index:%d", matrix_index);
-    temp[threadIdx.x] = matrix[matrix_index] * shared_vec[threadIdx.x];
+    if (matrix_index < row * col) {
+        temp[threadIdx.x] = matrix[matrix_index] * shared_vec[threadIdx.x];
+    }
     __syncthreads();
 
     int len = min(blockDim.x, col - blockIdx.y * blockDim.x);
@@ -420,48 +419,45 @@ __global__ void N3LDGKernelMultiplyLargeVectorBatch(float *matrix, int row, int 
     int matrix_index = blockIdx.y * blockDim.x +
         blockIdx.x * min(blockDim.x * gridDim.y, col) + threadIdx.x;
 
-    for (int h = blockIdx.z; h < count; h += gridDim.z) {
-        float * result = results[h];
-        for (int i = blockIdx.y * gridDim.x * blockDim.x +
-                blockIdx.x * blockDim.x + threadIdx.x; i < row;
-                i += gridDim.x * gridDim.y * blockDim.x) {
-            KernelPrintLine("set result as 0, i:%d", i);
-            result[i] = 0;
-        }
+    float * result = results[blockIdx.z];
+    for (int i = blockIdx.y * gridDim.x * blockDim.x +
+            blockIdx.x * blockDim.x + threadIdx.x; i < row;
+            i += gridDim.x * gridDim.y * blockDim.x) {
+        KernelPrintLine("set result as 0, i:%d", i);
+        result[i] = 0;
+    }
 
-        int vec_index = threadIdx.x + THREAD_COUNT_PER_BLOCK * blockIdx.y;
-        if (vec_index >= col) {
-            return;
-        }
-        shared_vec[threadIdx.x] = vectors[h][vec_index];
-        __syncthreads();
+    int vec_index = threadIdx.x + THREAD_COUNT_PER_BLOCK * blockIdx.y;
+    __syncthreads();
+    if (vec_index < col) {
+        shared_vec[threadIdx.x] = vectors[blockIdx.z][vec_index];
+    }
+    __syncthreads();
 
-        if (matrix_index >= row * col) {
-            return;
-        }
-        KernelPrintLine("matrix_index:%d", matrix_index);
+    KernelPrintLine("matrix_index:%d", matrix_index);
+    if (matrix_index < col * row) {
         temp[threadIdx.x] = matrix[matrix_index] * shared_vec[threadIdx.x];
+    }
+    __syncthreads();
+
+    int len = min(blockDim.x, col - blockIdx.y * blockDim.x);
+    KernelPrintLine("len:%d", len);
+    int last_j = len;
+    for (int j = ((len - 1) >> 1) + 1;; j=((j - 1) >>1) + 1) {
+        if (threadIdx.x < j) {
+            KernelPrintLine("j:%d, last_j;%d", j, last_j);
+            temp[threadIdx.x] += threadIdx.x + j < last_j ? temp[threadIdx.x +j] : 0;
+        }
         __syncthreads();
+        if (j == 1) break;
+        last_j = j;
+    }
 
-        int len = min(blockDim.x, col - blockIdx.y * blockDim.x);
-        KernelPrintLine("len:%d", len);
-        int last_j = len;
-        for (int j = ((len - 1) >> 1) + 1;; j=((j - 1) >>1) + 1) {
-            if (threadIdx.x < j) {
-                KernelPrintLine("j:%d, last_j;%d", j, last_j);
-                temp[threadIdx.x] += threadIdx.x + j < last_j ? temp[threadIdx.x +j] : 0;
-            }
-            __syncthreads();
-            if (j == 1) break;
-            last_j = j;
-        }
-
-        if (threadIdx.x == 0) {
-            KernelPrintLine("gridDim.x:%d ", gridDim.x);
-            int result_index = blockIdx.x;
-            KernelPrintLine("result_index:%d", result_index);
-            atomicAdd(result + result_index, temp[0]);
-        }
+    if (threadIdx.x == 0) {
+        KernelPrintLine("gridDim.x:%d ", gridDim.x);
+        int result_index = blockIdx.x;
+        KernelPrintLine("result_index:%d", result_index);
+        atomicAdd(result + result_index, temp[0]);
     }
 }
 
@@ -481,7 +477,8 @@ void N3LDGMultiplyVectorBatch(float *matrix, int row, int col, float** vectors, 
     } else {
         int block_need_y = (col + THREAD_COUNT_PER_BLOCK - 1) / THREAD_COUNT_PER_BLOCK;
         int block_count_per_vector = row * block_need_y;
-        int block_count_z = (MAX_BLOCK_COUNT + block_count_per_vector - 1) / block_count_per_vector;
+        int block_count_z = count;
+        printf("row:%d, block_need_y:%d, block_count_z:%d\n", row, block_need_y, block_count_z);
         dim3 block_dim(row, block_need_y, block_count_z);
         N3LDGKernelMultiplyLargeVectorBatch<<<block_dim, THREAD_COUNT_PER_BLOCK>>>(matrix,
                 row, col, vectors, count,results);
@@ -492,8 +489,8 @@ void N3LDGKernelTestSingleProduct() {
     CallCuda(cudaSetDevice(1));
     cublasHandle_t handle;
     cublasCreate(&handle);
-    for (int dima = 1; dima < 100000; dima *= 2) {
-        for (int dimb = 1; dimb < min(THREAD_COUNT_PER_BLOCK, 2000000000 / dima); dimb++) {
+    for (int dima = 1; dima < 100000; dima = 2 * dima + 1) {
+        for (int dimb = 1; dimb < min(THREAD_COUNT_PER_BLOCK, 2000000000 / dima); dimb = dimb * 2 + 1) {
             pair<int, int> dim(dima, dimb);
             float *W = NewGPUVector(dim.first * dim.second);
             float *x = NewGPUVector(dim.second);
@@ -525,10 +522,10 @@ void N3LDGKernelTest() {
     CallCuda(cudaPrintfInit());
     cublasHandle_t handle;
     cublasCreate(&handle);
-    for (int count = 2; count <= 2; count++) {
-        for (int dima = 512; dima <= 100000; dima *= 2) {
-            for (int dimb = 257; dimb <= min(THREAD_COUNT_PER_BLOCK, 1000000000 / dima / count);
-                    dimb++) {
+    for (int count = 1; count <= 4000; count = count * 4 + 1) {
+        for (int dima = 1; dima <= 2000; dima = dima * 2 + 1) {
+            for (int dimb = 1; dimb <= min(2000, 1000000000 / dima / count);
+                    dimb = dimb * 2 + 1) {
                 pair<int, int> dim(dima, dimb);
                 float *W = NewGPUVector(dim.first * dim.second);
                 float **xs = NewGPUVectors(count, dim.second);
@@ -575,7 +572,6 @@ void N3LDGKernelTest() {
                     CallCuda(cudaFree(vs[i]));
                 }
                 cudaPrintfDisplay(stdout, true);
-                return;
             }
         }
     }
