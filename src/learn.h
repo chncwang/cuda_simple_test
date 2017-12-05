@@ -32,5 +32,6 @@ float **ToGpuVectorArray(float** vec, int len);
 void Benchmark();
 void N3LDGKernelTest();
 void N3LDGKernelTestSingleProduct();
+void BatchMultiplyBenchmark();
 
 #endif

@@ -4,6 +4,7 @@
 #include <cublas_v2.h>
 #include <utility>
 #include "cuPrintf.cu"
+#include <tuple>
 
 using namespace std;
 
@@ -357,7 +358,6 @@ void N3LDGMultiply(float *matrix, int row, int col, float* vec, float *result) {
 
 __global__ void N3LDGKernelMultiplySmallVectorBatch(float *matrix, int row, int col, float** vectors, int count, float **results) {
     assert(blockDim.x == col);
-    cuPrintfRestrict(CUPRINTF_UNRESTRICTED, CUPRINTF_UNRESTRICTED);
     __shared__ volatile float temp[THREAD_COUNT_PER_BLOCK];
     __shared__ volatile float shared_vec[THREAD_COUNT_PER_BLOCK];
     int temp_index = blockDim.x * threadIdx.y + threadIdx.x;
@@ -428,7 +428,6 @@ __global__ void N3LDGKernelMultiplyLargeVectorBatch(float *matrix, int row, int 
     }
 
     int vec_index = threadIdx.x + THREAD_COUNT_PER_BLOCK * blockIdx.y;
-    __syncthreads();
     if (vec_index < col) {
         shared_vec[threadIdx.x] = vectors[blockIdx.z][vec_index];
     }
@@ -466,11 +465,11 @@ void N3LDGMultiplyVectorBatch(float *matrix, int row, int col, float** vectors, 
     if (col <= THREAD_COUNT_PER_BLOCK) {
         int row_count_per_block = THREAD_COUNT_PER_BLOCK / col;
         dim3 thread_dim(col, row_count_per_block);
-        printf("col:%d row_count_per_block:%d\n", col, row_count_per_block);
+        //printf("col:%d row_count_per_block:%d\n", col, row_count_per_block);
         int block_need_x = (row - 1) / row_count_per_block + 1;
         int block_count_x = min(block_need_x, MAX_BLOCK_COUNT);
         int block_count_y = (MAX_BLOCK_COUNT + block_count_x - 1) / block_count_x;
-        printf("block_count_x:%d, block_count_y:%d\n", block_count_x, block_count_y);
+        //printf("block_count_x:%d, block_count_y:%d\n", block_count_x, block_count_y);
         dim3 block_dim(block_count_x, block_count_y);
         N3LDGKernelMultiplySmallVectorBatch<<<block_dim, thread_dim>>>(matrix, row, col, vectors,
                 count, results);
@@ -478,7 +477,7 @@ void N3LDGMultiplyVectorBatch(float *matrix, int row, int col, float** vectors, 
         int block_need_y = (col + THREAD_COUNT_PER_BLOCK - 1) / THREAD_COUNT_PER_BLOCK;
         int block_count_per_vector = row * block_need_y;
         int block_count_z = count;
-        printf("row:%d, block_need_y:%d, block_count_z:%d\n", row, block_need_y, block_count_z);
+        //printf("row:%d, block_need_y:%d, block_count_z:%d\n", row, block_need_y, block_count_z);
         dim3 block_dim(row, block_need_y, block_count_z);
         N3LDGKernelMultiplyLargeVectorBatch<<<block_dim, THREAD_COUNT_PER_BLOCK>>>(matrix,
                 row, col, vectors, count,results);
@@ -523,8 +522,8 @@ void N3LDGKernelTest() {
     cublasHandle_t handle;
     cublasCreate(&handle);
     for (int count = 1; count <= 4000; count = count * 4 + 1) {
-        for (int dima = 1; dima <= 2000; dima = dima * 2 + 1) {
-            for (int dimb = 1; dimb <= min(2000, 1000000000 / dima / count);
+        for (int dima = 1; dima <= 200000; dima = dima * 2 + 1) {
+            for (int dimb = 1; dimb <= min(200000, 1000000000 / dima / count);
                     dimb = dimb * 2 + 1) {
                 pair<int, int> dim(dima, dimb);
                 float *W = NewGPUVector(dim.first * dim.second);
@@ -576,6 +575,94 @@ void N3LDGKernelTest() {
         }
     }
     cudaPrintfEnd();
+}
+
+void BatchMultiplyBenchmark() {
+    CallCuda(cudaSetDevice(1));
+    CallCuda(cudaPrintfInit());
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    vector<tuple<int, int, int>> dims = {
+        tuple<int,int,int>(10, 100, 100),
+        tuple<int,int,int>(100, 100, 100),
+        tuple<int,int,int>(1000, 100, 100),
+        tuple<int,int,int>(10, 200, 200),
+        tuple<int,int,int>(100, 200, 200),
+        tuple<int,int,int>(1000, 200, 200),
+        tuple<int,int,int>(10, 500, 500),
+        tuple<int,int,int>(100, 500, 500),
+        tuple<int,int,int>(1000, 500, 500),
+        tuple<int,int,int>(10, 1000, 1000),
+        tuple<int,int,int>(100, 1000, 1000),
+        tuple<int,int,int>(10, 2000, 2000),
+    };
+
+    for (auto &d : dims) {
+        int count = get<0>(d);
+        pair<int, int> dim(get<1>(d), get<2>(d));
+        float *W = NewGPUVector(dim.first * dim.second);
+        float **xs = NewGPUVectors(count, dim.second);
+        float **ys = NewGPUVectors(count, dim.first);
+        float **vs = NewGPUVectors(count, dim.first);
+        float **Ws = (float**)malloc(sizeof(float*) * count);
+        for (int i = 0; i < count; ++i) {
+            Ws[i] = W;
+        }
+        float **gpu_xs, **gpu_ys, **gpu_vs, **gpu_Ws;
+        CallCuda(cudaMalloc((void**)&gpu_xs, sizeof(float*) * count));
+        CallCuda(cudaMalloc((void**)&gpu_ys, sizeof(float*) * count));
+        CallCuda(cudaMalloc((void**)&gpu_vs, sizeof(float*) * count));
+        CallCuda(cudaMalloc((void**)&gpu_Ws, sizeof(float*) * count));
+        CallCuda(cudaMemcpy(gpu_vs, vs, sizeof(float*) * count, cudaMemcpyHostToDevice));
+        CallCuda(cudaMemcpy(gpu_Ws, Ws, sizeof(float*) * count, cudaMemcpyHostToDevice));
+            CallCuda(cudaMemcpy(gpu_xs, xs, sizeof(float*) * count, cudaMemcpyHostToDevice));
+            CallCuda(cudaMemcpy(gpu_ys, ys, sizeof(float*) * count, cudaMemcpyHostToDevice));
+
+        float sum = 0;
+        int iter = 1000;
+        for (int i = 0; i < iter; ++i) {
+            float alpha = 1.0;
+            float beta = 0.0;
+            //cout << "first:" << dim.first << " second:" << dim.second << endl;
+            cudaEvent_t start, stop;
+            cudaEventCreate(&start);
+            cudaEventCreate(&stop);
+            cudaEventRecord(start);
+            N3LDGMultiplyVectorBatch(W, dim.first, dim.second, gpu_xs, count, gpu_ys);
+            //cublasSgemmBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, (const float**)gpu_xs, 1 ,(const float **)gpu_Ws, dim.second, &beta, gpu_vs, 1, count);
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            float mill;
+            cudaEventElapsedTime(&mill, start, stop);
+            sum += mill;
+            cudaDeviceSynchronize();
+        }
+        cout << "count:" << count<< "dim:" << dim.first << "," << dim.second <<  " time:" << sum * 1000 / iter  << endl;
+
+        //N3LDGAssertEqual(ys[0], ys[1], dim.second);
+        //cudaDeviceSynchronize();
+        //printf("ys[0], ys[1] assert finished\n");
+        //CallCuda(cudaGetLastError());
+        //cublasSgemmBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, (const float**)gpu_xs, 1 ,(const float **)gpu_Ws, dim.second, &beta, gpu_vs, 1, count);
+        //N3LDGAssertEqual(gpu_ys, gpu_vs, dim.first, count);
+        //cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, xs[1],
+        //        1, W, dim.second, &beta, vs[1], 1);
+        //PrintGPUVector(vs[1], 10);
+        //N3LDGMultiply(W, dim.first, dim.second, xs[1], ys[1]);
+        //PrintGPUVector(ys[1], 10);
+
+        CallCuda(cudaFree(gpu_Ws));
+        CallCuda(cudaFree(gpu_xs));
+        CallCuda(cudaFree(gpu_ys));
+        CallCuda(cudaFree(gpu_vs));
+        CallCuda(cudaFree(W));
+        for (int i = 0; i < count; ++i) {
+            CallCuda(cudaFree(xs[i]));
+            CallCuda(cudaFree(ys[i]));
+            CallCuda(cudaFree(vs[i]));
+        }
+        cudaPrintfDisplay(stdout, true);
+    }
 }
 
 void Benchmark() {
