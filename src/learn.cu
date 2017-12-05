@@ -24,7 +24,7 @@ int BlockCount(int size) {
     return n > MAX_BLOCK_COUNT ? MAX_BLOCK_COUNT : n;
 }
 
-#define KERNEL_LOG
+//#define KERNEL_LOG
 
 #ifdef KERNEL_LOG
 #define  KernelPrintLine(format, ...)\
@@ -226,7 +226,7 @@ __global__ void KernelAssertEqual(float **a, float **b, int len, int count) {
         float s = a[i][j] - b[i][j];
         float ratio = s / a[i][j];
         if((s < -0.001 || s > 0.001) && (ratio < -0.001 || ratio > 0.001)) {
-            cuPrintf("i:%d, j:%d, a[i][j]:%f, b[i][j]:%f, s:%f\n", i, j, a[i][j], b[i][j], s);
+            printf("i:%d, j:%d, a[i][j]:%f, b[i][j]:%f, s:%f\n", i, j, a[i][j], b[i][j], s);
         }
     }
 }
@@ -358,12 +358,14 @@ void N3LDGMultiply(float *matrix, int row, int col, float* vec, float *result) {
 
 __global__ void N3LDGKernelMultiplySmallVectorBatch(float *matrix, int row, int col, float** vectors, int count, float **results) {
     assert(blockDim.x == col);
-    cuPrintfRestrict(514, 2);
+    cuPrintfRestrict(CUPRINTF_UNRESTRICTED, CUPRINTF_UNRESTRICTED);
     __shared__ volatile float temp[THREAD_COUNT_PER_BLOCK];
     __shared__ volatile float shared_vec[THREAD_COUNT_PER_BLOCK];
     int temp_index = blockDim.x * threadIdx.y + threadIdx.x;
     int matrix_index_begin = blockIdx.x * blockDim.y * blockDim.x + temp_index;
     KernelPrintLine("matrix_index_begin:%d", matrix_index_begin);
+
+    int matrix_index_upper_bound = row * col;
 
     for (int h = blockIdx.y; h < count; h +=gridDim.y) {
         KernelPrintLine("h:%d gridDim.y:%d", h, gridDim.y);
@@ -374,17 +376,16 @@ __global__ void N3LDGKernelMultiplySmallVectorBatch(float *matrix, int row, int 
         __syncthreads();
         for (int i = 0;; ++i) {
             int matrix_index = matrix_index_begin + i * gridDim.x * blockDim.x * blockDim.y;
-            if (matrix_index >= row * col) {
-                break;
-            }
             KernelPrintLine("matrix_index:%d temp_index:%d", matrix_index, temp_index);
             __syncthreads();
-            temp[temp_index] = matrix[matrix_index] * shared_vec[threadIdx.x];
+            if (matrix_index < matrix_index_upper_bound) {
+                temp[temp_index] = matrix[matrix_index] * shared_vec[threadIdx.x];
+            }
             __syncthreads();
 
             int last_j = blockDim.x;
             for (int j = ((blockDim.x - 1) >> 1) + 1;; j=((j - 1) >>1) + 1) {
-                if (threadIdx.x < j) {
+                if (threadIdx.x < j && matrix_index < matrix_index_upper_bound) {
                     KernelPrintLine("temp_index:%d, j:%d, last_j;%d", temp_index, j, last_j);
                     temp[temp_index] += threadIdx.x + j < last_j ? temp[temp_index +j] : 0;
                 }
@@ -393,13 +394,17 @@ __global__ void N3LDGKernelMultiplySmallVectorBatch(float *matrix, int row, int 
                 last_j = j;
             }
 
-            if (threadIdx.x == 0) {
+            if (threadIdx.x == 0 && matrix_index < matrix_index_upper_bound) {
                 KernelPrintLine("i:%d gridDim.x:%d blockDim.y:%d", i, gridDim.x, blockDim.y);
                 int result_index = blockDim.y * blockIdx.x + threadIdx.y +
                     i * gridDim.x * blockDim.y;
                 KernelPrintLine("h:%d result_index:%d temp_index:%d", h, result_index,
                         blockDim.x * threadIdx.y);
                 results[h][result_index] = temp[blockDim.x * threadIdx.y];
+            }
+
+            if (__syncthreads_and(matrix_index >= matrix_index_upper_bound)) {
+                break;
             }
         }
     }
@@ -547,14 +552,17 @@ void N3LDGKernelTest() {
                 float beta = 0.0;
                 cout << "count:" << count <<"first:" << dim.first << " second:" << dim.second << endl;
                 N3LDGMultiplyVectorBatch(W, dim.first, dim.second, gpu_xs, count, gpu_ys);
-                CallCuda(cudaGetLastError());
+                //N3LDGAssertEqual(ys[0], ys[1], dim.second);
+                //cudaDeviceSynchronize();
+                //printf("ys[0], ys[1] assert finished\n");
+                //CallCuda(cudaGetLastError());
                 cublasSgemmBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, (const float**)gpu_xs, 1 ,(const float **)gpu_Ws, dim.second, &beta, gpu_vs, 1, count);
                 N3LDGAssertEqual(gpu_ys, gpu_vs, dim.first, count);
-                cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, xs[1],
-                        1, W, dim.second, &beta, vs[1], 1);
-                PrintGPUVector(vs[1], 10);
-                N3LDGMultiply(W, dim.first, dim.second, xs[1], ys[1]);
-                PrintGPUVector(ys[1], 10);
+                //cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, xs[1],
+                //        1, W, dim.second, &beta, vs[1], 1);
+                //PrintGPUVector(vs[1], 10);
+                //N3LDGMultiply(W, dim.first, dim.second, xs[1], ys[1]);
+                //PrintGPUVector(ys[1], 10);
 
                 CallCuda(cudaFree(gpu_Ws));
                 CallCuda(cudaFree(gpu_xs));
