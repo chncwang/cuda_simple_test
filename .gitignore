@@ -6,3 +6,4 @@ main
 *.swo
 *.swp
 build/
+tags
