@@ -11,7 +11,8 @@
 #include <chrono>
 
 int main() {
-    BatchMultiplyBenchmark();
+    //AddTest();
+    AddBenchmark();
     //Benchmark();
     //N3LDGKernelTest();
     //N3LDGKernelTestSingleProduct();

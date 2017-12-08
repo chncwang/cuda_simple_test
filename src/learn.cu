@@ -516,6 +516,96 @@ void N3LDGKernelTestSingleProduct() {
     }
 }
 
+__global__ void N3LDGKernelAdd(float *src, float *dest, int len) {
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    int step = blockDim.x * gridDim.x;
+    for (int i = index; i < len; i += step) {
+        dest[index] += src[index];
+    }
+}
+
+void N3LDGAdd(float *src, float *dest, int len) {
+    N3LDGKernelAdd<<<BlockCount(len) ,THREAD_COUNT_PER_BLOCK>>>(src, dest, len);
+}
+
+void AddTest() {
+    CallCuda(cudaSetDevice(1));
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    for (int dim = 1; dim < 100000; dim = dim * 2 + 1) {
+        float *x = NewGPUVector(dim);
+        float *y = NewGPUVector(dim);
+        float *v = NewGPUVector(dim);
+
+        float alpha = 1.0;
+        float beta = 0.0;
+        cout << "dim:" << dim << endl;
+        N3LDGAdd(x, y, dim);
+        cublasSaxpy(handle, dim, &alpha, x, 1, v, 1);
+        //PrintGPUVector(W, dim.first * dim.second);
+        //PrintGPUVector(x, dim.second);
+        //PrintGPUVector(y, min(dim.first, 100));
+        //PrintGPUVector(v, min(dim.first, 100));
+        N3LDGAssertEqual(y, v, dim);
+
+        CallCuda(cudaFree(x));
+        CallCuda(cudaFree(y));
+        CallCuda(cudaFree(v));
+        CallCuda(cudaGetLastError());
+    }
+}
+
+void AddBenchmark() {
+    CallCuda(cudaSetDevice(1));
+    vector<int> dims = {
+        100,
+        200,
+        500,
+        1000,
+        2000,
+        5000,
+        10000,
+        20000,
+        50000,
+        100000
+    };
+    float alpha = 1.0;
+    float beta = 0.0;
+
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    for (auto &dim : dims) {
+        cout << "begin cal" << endl;
+        float *x = NewGPUVector(dim);
+        float *y = NewGPUVector(dim);
+        float *v = NewGPUVector(dim);
+
+        float sum = 0;
+        int iter = 100000;
+        for (int i = 0; i < iter; ++i) {
+            //cout << "first:" << dim.first << " second:" << dim.second << endl;
+            cudaEvent_t start, stop;
+            cudaEventCreate(&start);
+            cudaEventCreate(&stop);
+            cudaEventRecord(start);
+            //N3LDGAdd(x, y, dim);
+            cublasSaxpy(handle, dim, &alpha, x, 1, v, 1);
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            float mill;
+            cudaEventElapsedTime(&mill, start, stop);
+            sum += mill;
+            cudaDeviceSynchronize();
+        }
+        cout << "dim:" << dim << " time:" << sum * 1000 / iter  << endl;
+
+        CallCuda(cudaFree(x));
+        CallCuda(cudaFree(y));
+        CallCuda(cudaFree(v));
+    }
+    CallCuda(cudaGetLastError());
+}
+
 void N3LDGKernelTest() {
     CallCuda(cudaSetDevice(1));
     CallCuda(cudaPrintfInit());
