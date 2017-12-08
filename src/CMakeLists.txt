@@ -4,12 +4,12 @@ if(CMAKE_COMPILER_IS_GNUCXX)
     if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 4.9 OR CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 4.9)
         # gcc 4.9 or later versions raise SEGV due to the optimization problem.
         # Use -O1 instead for now.
-        list(APPEND CUDA_NVCC_FLAGS "-O1")
+        list(APPEND CUDA_NVCC_FLAGS "-O3")
     else()
-        list(APPEND CUDA_NVCC_FLAGS "-O2")
+        list(APPEND CUDA_NVCC_FLAGS "-O3")
     endif()
 else()
-    list(APPEND CUDA_NVCC_FLAGS "-O2")
+    list(APPEND CUDA_NVCC_FLAGS "-O3")
 endif()
 
 if (CMAKE_BUILD_TYPE MATCHES Debug)
