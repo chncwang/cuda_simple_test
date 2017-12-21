@@ -606,6 +606,89 @@ void AddBenchmark() {
     CallCuda(cudaGetLastError());
 }
 
+__global__ void N3LDGKernelAdd(float **src, float **dest, int len, int count) {
+    int thread_count_per_arr = ((len - 1) / THREAD_COUNT_PER_WRAP + 1) * THREAD_COUNT_PER_WRAP;
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    int step = blockDim.x * gridDim.x / thread_count_per_arr;
+    assert(step > 0);
+    int count_index = index / thread_count_per_arr;
+
+    for (int i = count_index; i < count; i += step) {
+        int arr_index = index % thread_count_per_arr;
+        if (arr_index < len) {
+            dest[i][arr_index] += src[i][arr_index];
+        }
+    }
+}
+
+__global__ void N3LDGKernelAddWithoutLimit(float **src, float **dest, int len, int count) {
+    int index = blockDim.x * blockIdx.x + threadIdx.x;
+    int total_count = len * count;
+    int step = blockDim.x * gridDim.x;
+    for (int i = index; i < total_count; i += step) {
+        int ci = i / len;
+        int li = i % len;
+        dest[ci][li] += src[ci][li];
+    }
+}
+
+void N3LDGAdd(float **src, float **dest, int len, int count) {
+    if (len <= MAX_BLOCK_COUNT * THREAD_COUNT_PER_BLOCK) {
+        int block_count = BlockCount(((len - 1) / THREAD_COUNT_PER_WRAP + 1) *
+                THREAD_COUNT_PER_WRAP * count);
+        N3LDGKernelAdd<<<block_count, THREAD_COUNT_PER_BLOCK>>>(src, dest, len, count);
+    } else {
+        N3LDGKernelAddWithoutLimit<<<BlockCount(len * count), THREAD_COUNT_PER_BLOCK>>>(
+                src, dest, len, count);
+    }
+}
+
+void N3LDGTestBatchAdd() {
+    CallCuda(cudaSetDevice(1));
+    CallCuda(cudaPrintfInit());
+    cublasHandle_t handle;
+    cublasCreate(&handle);
+    for (int count = 1; count <= 4000; count = count * 4 + 1) {
+        for (int dim = 1; dim <= 100000; dim = dim * 2 + 1) {
+            float **xs = NewGPUVectors(count, dim);
+            float **ys = NewGPUVectors(count, dim);
+            float **vs = NewGPUVectors(count, dim);
+            float **gpu_xs, **gpu_ys, **gpu_vs;
+            CallCuda(cudaMalloc((void**)&gpu_xs, sizeof(float*) * count));
+            CallCuda(cudaMalloc((void**)&gpu_ys, sizeof(float*) * count));
+            CallCuda(cudaMalloc((void**)&gpu_vs, sizeof(float*) * count));
+            CallCuda(cudaMemcpy(gpu_xs, xs, sizeof(float*) * count, cudaMemcpyHostToDevice));
+            CallCuda(cudaMemcpy(gpu_ys, ys, sizeof(float*) * count, cudaMemcpyHostToDevice));
+            CallCuda(cudaMemcpy(gpu_vs, vs, sizeof(float*) * count, cudaMemcpyHostToDevice));
+
+            float alpha = 1.0;
+            float beta = 0.0;
+            cout << "count:" << count <<"dim:" << dim << endl;
+            N3LDGAdd(gpu_xs, gpu_ys, dim, count);
+            for (int i = 0; i <count; ++i) {
+                N3LDGAdd(xs[i], vs[i], dim);
+            }
+            N3LDGAssertEqual(gpu_ys, gpu_vs, dim, count);
+            //cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, 1, dim.first, dim.second, &alpha, xs[1],
+            //        1, W, dim.second, &beta, vs[1], 1);
+            //PrintGPUVector(vs[1], 10);
+            //N3LDGMultiply(W, dim.first, dim.second, xs[1], ys[1]);
+            //PrintGPUVector(ys[1], 10);
+
+            CallCuda(cudaFree(gpu_xs));
+            CallCuda(cudaFree(gpu_ys));
+            CallCuda(cudaFree(gpu_vs));
+            for (int i = 0; i < count; ++i) {
+                CallCuda(cudaFree(xs[i]));
+                CallCuda(cudaFree(ys[i]));
+                CallCuda(cudaFree(vs[i]));
+            }
+            cudaPrintfDisplay(stdout, true);
+        }
+    }
+    cudaPrintfEnd();
+}
+
 void N3LDGKernelTest() {
     CallCuda(cudaSetDevice(1));
     CallCuda(cudaPrintfInit());

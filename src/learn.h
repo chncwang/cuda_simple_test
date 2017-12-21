@@ -35,5 +35,6 @@ void N3LDGKernelTestSingleProduct();
 void BatchMultiplyBenchmark();
 void AddTest();
 void AddBenchmark();
+void N3LDGTestBatchAdd();
 
 #endif
